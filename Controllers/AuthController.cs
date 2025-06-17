@@ -35,7 +35,7 @@ namespace HomyWayAPI.Controllers
         public async Task<IActionResult> Register(UserDTO userdto)
         {
             if (_context.Users.Any(u => u.Name == userdto.Name)) return BadRequest("User already exists");
-            var groupExists =await _context.Groups.AnyAsync(g=>g.Id == userdto.Gid);
+            var groupExists = await _context.Groups.AnyAsync(g => g.Id == userdto.Gid);
 
             //Check if group exists
             if (!groupExists)
@@ -46,7 +46,7 @@ namespace HomyWayAPI.Controllers
             //Created object of User model 
             var nuser = new User
             {
-                Id = 0, 
+                Id = 0,
                 Name = userdto.Name,
                 Email = userdto.Email,
                 Phone = userdto.Phone,
@@ -70,15 +70,12 @@ namespace HomyWayAPI.Controllers
         {
             var Jwt = _config.GetSection("Jwt");
             var user = _context.Users.SingleOrDefault(u => u.Email == users.Email);
-            
-            //check user is ExistsExpression or not 
-            if (user == null || !BCrypt.Net.BCrypt.Verify(users.Password, user.Password)) return Unauthorized("Invalid credentials");
 
-            //check status of user 
-            if (user.Status == "pending") return Unauthorized("Please wait for approval");
-            if (user.Status == "block") return Unauthorized("Your account has been block");
+            if (user == null || !BCrypt.Net.BCrypt.Verify(users.Password, user.Password)) return Ok("Invalid credentials.");
 
-            //valid user 
+            if (user.Status == "pending") return Ok("Please wait for approval");
+            if (user.Status == "block") return Ok("Your account has been block");
+
             var token = GenerateJwtToken(users.Email);
             return Ok(new { token, user = new { user.Name, user.Email, user.Phone, user.Gid } });
 
@@ -131,5 +128,66 @@ namespace HomyWayAPI.Controllers
 
             return new JwtSecurityTokenHandler().WriteToken(token);
         }
+
+
+        [HttpPost("forgot-password")]
+        public IActionResult ForgotPassword([FromBody] ForgotPasswordRequestDto request)
+        {
+            var user = _context.Users.FirstOrDefault(u => u.Phone == request.Phone);
+            if (user == null) return Ok("User not found");
+
+            var otp = new Random().Next(100000, 999999).ToString();
+            OtpMemoryStore.SaveOtp(request.Phone, otp);
+
+            Console.WriteLine($"Sending OTP {otp} to phone {request.Phone}");
+
+            return Ok($"OTP: {otp} sent to your phone.");
+        }
+
+        [HttpPost("verify-otp")]
+        public IActionResult VerifyOtp([FromBody] VerifyOtpDto request)
+        {
+            bool isValid = OtpMemoryStore.VerifyOtp(request.Phone, request.Otp);
+            if (!isValid) return Ok("Invalid or expired OTP");
+
+            return Ok("OTP verified successfully.");
+        }
+
+        [HttpPost("reset-password")]
+        public IActionResult ResetPassword([FromBody] ResetPasswordDto request)
+        {
+            var user = _context.Users.FirstOrDefault(u => u.Phone == request.Phone);
+            if (user == null) return Ok("User not found");
+
+            user.Password = BCrypt.Net.BCrypt.HashPassword(request.NewPassword); 
+            _context.SaveChanges();
+
+            return Ok("Password reset successfully.");
+        }
+
+
+        public static class OtpMemoryStore
+        {
+            private static readonly Dictionary<string, (string Otp, DateTime Expiry)> otpStore = new();
+
+            public static void SaveOtp(string phone, string otp, int expiryMinutes = 5)
+            {
+                otpStore[phone] = (otp, DateTime.UtcNow.AddMinutes(expiryMinutes));
+            }
+
+            public static bool VerifyOtp(string phone, string otp)
+            {
+                if (otpStore.TryGetValue(phone, out var data))
+                {
+                    if (data.Otp == otp && data.Expiry > DateTime.UtcNow)
+                    {
+                        otpStore.Remove(phone);
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+
     }
 }
